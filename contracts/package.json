@@ -1,0 +1,18 @@
+{
+  "name": "medicrypt-contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MediCrypt smart contracts — private AI symptom triage on Ritual Chain",
+  "scripts": {
+    "build": "hardhat compile",
+    "deploy": "node scripts/deploy.mjs",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "devDependencies": {
+    "hardhat": "^2.22.10"
+  },
+  "dependencies": {
+    "eciesjs": "^0.4.11",
+    "viem": "^2.21.0"
+  }
+}

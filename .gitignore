@@ -1,0 +1,25 @@
+# Secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+*.key
+
+# Dependencies
+node_modules/
+
+# Hardhat
+contracts/artifacts/
+contracts/cache/
+
+# Next.js
+frontend/.next/
+frontend/out/
+frontend/build/
+
+# Deploy output
+deployments/*.local.json
+
+# Misc
+.DS_Store
+*.log
+npm-debug.log*
