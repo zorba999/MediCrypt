@@ -57,9 +57,28 @@ MediCrypt/
 | Explorer | `https://explorer.ritualfoundation.org` |
 | Faucet | `https://faucet.ritualfoundation.org` |
 
+## Deployment
+
+| | |
+|---|---|
+| Contract | [`0x3FCAb9cef001F19336f0806C04195988c2501CA4`](https://explorer.ritualfoundation.org/address/0x3FCAb9cef001F19336f0806C04195988c2501CA4) |
+| Network | Ritual Chain (1979) |
+| LLM executor | `0xB42e435c4252A5a2E7440e37B609F00c61a0c91B` |
+
+```bash
+cd contracts
+npm install
+npx hardhat compile
+NODE_TLS_REJECT_UNAUTHORIZED=0 node scripts/deploy.mjs   # deploy + fund
+NODE_TLS_REJECT_UNAUTHORIZED=0 node scripts/smoke.mjs    # live triage + decrypt
+```
+
+> `NODE_TLS_REJECT_UNAUTHORIZED=0` is only needed on machines whose antivirus/proxy
+> intercepts TLS (Node otherwise rejects the injected CA). Drop it elsewhere.
+
 ## Status
 
-🚧 Active build. See commit history for progress.
+🚧 Active build. Contract deployed; frontend in progress. See commit history.
 
 ## Roadmap
 
