@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   useAccount,
   useConnect,
@@ -10,7 +10,8 @@ import {
   useWalletClient,
   useReadContract,
 } from "wagmi";
-import { decodeEventLog, parseEther, formatEther, type Hex } from "viem";
+import { decodeEventLog, parseEther, type Hex } from "viem";
+import gsap from "gsap";
 import { ritualChain } from "@/lib/chain";
 import {
   MEDICRYPT_ADDRESS,
@@ -24,6 +25,9 @@ import {
   decodeTriageResult,
   type Triage,
 } from "@/lib/triage";
+import { BgCanvas } from "@/components/BgCanvas";
+import { ThemeToggle } from "@/components/ThemeToggle";
+import { ScrambleText } from "@/components/ScrambleText";
 
 type Phase =
   | "idle"
@@ -42,27 +46,31 @@ const RISK_CLASS: Record<string, string> = {
 };
 
 const EXAMPLES: { label: string; text: string }[] = [
-  {
-    label: "🤧 Cold / flu",
-    text: "Sore throat and a mild fever (37.9°C) for two days, plus a runny nose and a light cough. No trouble breathing.",
-  },
-  {
-    label: "🤕 Headache",
-    text: "A throbbing headache on one side for the last 6 hours, a bit of nausea, and light feels uncomfortable. No fever.",
-  },
-  {
-    label: "🤢 Stomach upset",
-    text: "Stomach cramps and diarrhea since this morning after eating out, with some nausea but no blood and no high fever.",
-  },
-  {
-    label: "🫁 Chest pain",
-    text: "Tight pressure in the center of my chest for about 20 minutes, spreading to my left arm, with shortness of breath and sweating.",
-  },
-  {
-    label: "🤚 Skin rash",
-    text: "An itchy red rash on both forearms that appeared yesterday after gardening. No swelling of the face or throat, breathing is fine.",
-  },
+  { label: "🤧 Cold / flu", text: "Sore throat and a mild fever (37.9°C) for two days, plus a runny nose and a light cough. No trouble breathing." },
+  { label: "🤕 Headache", text: "A throbbing headache on one side for the last 6 hours, a bit of nausea, and light feels uncomfortable. No fever." },
+  { label: "🤢 Stomach upset", text: "Stomach cramps and diarrhea since this morning after eating out, with some nausea but no blood and no high fever." },
+  { label: "🫁 Chest pain", text: "Tight pressure in the center of my chest for about 20 minutes, spreading to my left arm, with shortness of breath and sweating." },
+  { label: "🤚 Skin rash", text: "An itchy red rash on both forearms that appeared yesterday after gardening. No facial or throat swelling, breathing is fine." },
 ];
+
+const STEPS = [
+  { key: "connect", label: "Wallet connected" },
+  { key: "fund", label: "Inference escrow ready" },
+  { key: "submit", label: "Encrypted request sent" },
+  { key: "think", label: "AI reasoning inside the TEE" },
+  { key: "decrypt", label: "Decrypting locally" },
+];
+
+function phaseStepIndex(phase: Phase, connected: boolean): number {
+  switch (phase) {
+    case "funding": return 1;
+    case "submitting": return 2;
+    case "waiting": return 3;
+    case "decrypting": return 4;
+    case "done": return 5;
+    default: return connected ? 1 : 0;
+  }
+}
 
 export default function Home() {
   const { address, isConnected } = useAccount();
@@ -78,6 +86,12 @@ export default function Home() {
   const [encrypted, setEncrypted] = useState(false);
   const [error, setError] = useState("");
   const [txHash, setTxHash] = useState<Hex | null>(null);
+  const [revealAdvice, setRevealAdvice] = useState(false);
+
+  const heroRef = useRef<HTMLDivElement>(null);
+  const consoleRef = useRef<HTMLDivElement>(null);
+  const resultRef = useRef<HTMLDivElement>(null);
+  const adviceRef = useRef<HTMLUListElement>(null);
 
   const { data: total } = useReadContract({
     address: MEDICRYPT_ADDRESS,
@@ -87,14 +101,44 @@ export default function Home() {
 
   const wrongChain = isConnected && chainId !== ritualChain.id;
   const busy = ["funding", "submitting", "waiting", "decrypting"].includes(phase);
+  const showPipeline = busy || phase === "done";
+  const activeStep = phaseStepIndex(phase, isConnected);
 
-  // Once connected, make sure the wallet is on Ritual Chain — prompts MetaMask to add it
-  // (wallet_addEthereumChain) the first time, since it isn't a default network.
+  // Hero + console entrance.
+  useEffect(() => {
+    const ctx = gsap.context(() => {
+      const tl = gsap.timeline({ defaults: { ease: "power3.out" } });
+      tl.from(".eyebrow", { y: 16, opacity: 0, duration: 0.6 })
+        .from(".hero .word", { y: 40, opacity: 0, duration: 0.7, stagger: 0.06 }, "-=0.2")
+        .from(".hero .lede", { y: 20, opacity: 0, duration: 0.6 }, "-=0.35")
+        .from(".meta-strip .tag", { y: 14, opacity: 0, duration: 0.5, stagger: 0.07 }, "-=0.3")
+        .from(consoleRef.current, { y: 40, opacity: 0, duration: 0.8 }, "-=0.4");
+    });
+    return () => ctx.revert();
+  }, []);
+
+  // Auto-switch to Ritual once connected.
   useEffect(() => {
     if (isConnected && chainId !== ritualChain.id) {
       switchChain({ chainId: ritualChain.id });
     }
   }, [isConnected, chainId, switchChain]);
+
+  // Animate the result card in.
+  useEffect(() => {
+    if (phase === "done" && resultRef.current) {
+      gsap.from(resultRef.current, { y: 30, opacity: 0, duration: 0.7, ease: "power3.out" });
+    }
+  }, [phase]);
+
+  // Stagger advice lines after the scramble resolves.
+  useEffect(() => {
+    if (revealAdvice && adviceRef.current) {
+      gsap.from(adviceRef.current.children, {
+        x: -14, opacity: 0, duration: 0.5, stagger: 0.08, ease: "power2.out",
+      });
+    }
+  }, [revealAdvice]);
 
   function connectWallet() {
     connect({ connector: connectors[0], chainId: ritualChain.id });
@@ -124,6 +168,7 @@ export default function Home() {
     setError("");
     setTriage(null);
     setTxHash(null);
+    setRevealAdvice(false);
     if (!walletClient || !address || !publicClient) {
       setError("Connect your wallet first.");
       return;
@@ -134,8 +179,6 @@ export default function Home() {
     }
     try {
       await ensureEscrow();
-
-      // Ephemeral keypair — the private key never leaves this browser tab.
       const eph = generateEphemeralKey();
 
       setPhase("submitting");
@@ -156,30 +199,19 @@ export default function Home() {
       let hadError = false;
       for (const log of receipt.logs) {
         try {
-          const ev = decodeEventLog({
-            abi: MEDICRYPT_ABI,
-            data: log.data,
-            topics: log.topics,
-          });
+          const ev = decodeEventLog({ abi: MEDICRYPT_ABI, data: log.data, topics: log.topics });
           if (ev.eventName === "TriageCompleted") {
             hadError = ev.args.hasError as boolean;
             resultHex = ev.args.encryptedResult as Hex;
           }
-        } catch {
-          /* not our event */
-        }
+        } catch { /* not our event */ }
       }
 
       if (hadError || !resultHex || resultHex === "0x") {
-        throw new Error(
-          "The model could not complete the triage. Please try again."
-        );
+        throw new Error("The model could not complete the triage. Please try again.");
       }
 
-      const { triage: t, wasEncrypted } = decodeTriageResult(
-        resultHex,
-        eph.privateKey
-      );
+      const { triage: t, wasEncrypted } = decodeTriageResult(resultHex, eph.privateKey);
       setTriage(t);
       setEncrypted(wasEncrypted);
       setPhase("done");
@@ -190,189 +222,183 @@ export default function Home() {
   }
 
   const riskKey = (triage?.risk_level || "").toLowerCase();
+  const summaryText = triage?.summary || triage?.raw || "";
 
   return (
-    <div className="wrap">
-      <div className="topbar">
-        <div className="brand">
-          <span className="dot">🔐</span> MediCrypt
-        </div>
-        {isConnected ? (
-          <span className="pill">
-            ● {address!.slice(0, 6)}…{address!.slice(-4)}
-          </span>
-        ) : (
-          <button
-            className="btn-ghost"
-            onClick={connectWallet}
-          >
-            Connect wallet
-          </button>
-        )}
-      </div>
+    <>
+      <div className="bg-aura" aria-hidden />
+      <div className="bg-grid" aria-hidden />
+      <BgCanvas />
 
-      <div className="hero">
-        <h1>
-          Private AI symptom triage,
-          <br />
-          <span className="grad">encrypted to you alone.</span>
-        </h1>
-        <p>
-          Describe how you feel. An AI running inside Ritual&apos;s secure enclave
-          gives you a triage — and the answer is encrypted so only your browser
-          can read it. No clinic, no data broker, no profile.
-        </p>
-        <div className="stats">
-          <span>Contract: {MEDICRYPT_ADDRESS.slice(0, 8)}…</span>
-          <span>· Triages served: {total?.toString() ?? "—"}</span>
-        </div>
-      </div>
-
-      {wrongChain && (
-        <div className="card">
-          <div className="status">You&apos;re on the wrong network.</div>
-          <div className="row">
-            <button
-              className="btn-primary"
-              onClick={() => switchChain({ chainId: ritualChain.id })}
-            >
-              Switch to Ritual Chain
-            </button>
+      <div className="wrap">
+        <div className="topbar">
+          <div className="brand">
+            <span className="mark"><span>🔐</span></span> MediCrypt
           </div>
-        </div>
-      )}
-
-      <div className="card">
-        <h2>Your symptoms</h2>
-        <textarea
-          placeholder="e.g. Sore throat and mild fever for two days, plus a runny nose. No trouble breathing."
-          value={symptoms}
-          onChange={(e) => setSymptoms(e.target.value)}
-          disabled={busy}
-        />
-
-        <div className="examples">
-          <span className="examples-label">Try an example:</span>
-          {EXAMPLES.map((ex) => (
-            <button
-              key={ex.label}
-              type="button"
-              className="chip"
-              onClick={() => setSymptoms(ex.text)}
-              disabled={busy}
-            >
-              {ex.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="row">
-          <button
-            className="btn-primary"
-            onClick={onTriage}
-            disabled={busy || !isConnected || wrongChain}
-          >
-            {busy ? "Working…" : "Get private triage"}
-          </button>
-          {!isConnected && (
-            <button
-              className="btn-ghost"
-              onClick={connectWallet}
-            >
-              Connect wallet
-            </button>
-          )}
-        </div>
-
-        <div className="privacy-note">
-          <span>🔑</span>
-          <span>
-            A one-time encryption key is generated in your browser. Only its
-            public half is sent on-chain; the triage comes back encrypted to it,
-            so no one else — not even the node — can read your result.
-          </span>
-        </div>
-
-        {phase === "funding" && (
-          <div className="status">
-            <span className="spinner" /> Funding inference escrow (one-time
-            deposit)…
-          </div>
-        )}
-        {phase === "submitting" && (
-          <div className="status">
-            <span className="spinner" /> Sending your encrypted request…
-          </div>
-        )}
-        {phase === "waiting" && (
-          <div className="status">
-            <span className="spinner" /> Running AI inference inside the TEE…
-          </div>
-        )}
-        {phase === "decrypting" && (
-          <div className="status">
-            <span className="spinner" /> Decrypting your result locally…
-          </div>
-        )}
-        {error && <div className="error">⚠ {error}</div>}
-      </div>
-
-      {triage && phase === "done" && (
-        <div className="card result">
-          <div className="row" style={{ justifyContent: "space-between" }}>
-            <h3>Your triage</h3>
-            {riskKey && (
-              <span className={`risk ${RISK_CLASS[riskKey] || ""}`}>
-                {triage.risk_level}
+          <div className="topbar-right">
+            <ThemeToggle />
+            {isConnected ? (
+              <span className="addr-pill">
+                <span className="dot" /> {address!.slice(0, 6)}…{address!.slice(-4)}
               </span>
-            )}
-          </div>
-
-          {triage.summary && <p style={{ lineHeight: 1.6 }}>{triage.summary}</p>}
-
-          {triage.advice && triage.advice.length > 0 && (
-            <ul className="advice">
-              {triage.advice.map((a, i) => (
-                <li key={i}>{a}</li>
-              ))}
-            </ul>
-          )}
-
-          {typeof triage.see_doctor === "boolean" && (
-            <p className="status">
-              {triage.see_doctor
-                ? "👩‍⚕️ Seeing a doctor is recommended."
-                : "🟢 Self-care is likely reasonable for now."}
-            </p>
-          )}
-
-          {triage.raw && <p style={{ lineHeight: 1.6 }}>{triage.raw}</p>}
-
-          <p className="disclaimer">
-            {triage.disclaimer ||
-              "This is informational only and not a substitute for professional medical care."}
-          </p>
-
-          <div className="stats">
-            <span>{encrypted ? "🔒 Decrypted locally" : "⚠ Plaintext result"}</span>
-            {txHash && (
-              <a
-                href={`https://explorer.ritualfoundation.org/tx/${txHash}`}
-                target="_blank"
-                rel="noreferrer"
-              >
-                View transaction ↗
-              </a>
+            ) : (
+              <button className="btn-ghost" onClick={connectWallet}>Connect wallet</button>
             )}
           </div>
         </div>
-      )}
 
-      <div className="foot">
-        Built on Ritual Chain · LLM precompile 0x0802 · ECIES private outputs
-        <br />
-        MediCrypt is a demo. In an emergency, contact local emergency services.
+        <div className="hero" ref={heroRef}>
+          <span className="eyebrow"><span className="live" /> Ritual Chain · enclave-private AI</span>
+          <h1>
+            <span className="word">Private</span>{" "}
+            <span className="word">AI</span>{" "}
+            <span className="word">symptom</span>{" "}
+            <span className="word">triage,</span>
+            <br />
+            <span className="grad">
+              <span className="word">encrypted</span>{" "}
+              <span className="word">to</span>{" "}
+              <span className="word">you</span>{" "}
+              <span className="word">alone.</span>
+            </span>
+          </h1>
+          <p className="lede">
+            Describe how you feel. An AI running inside Ritual&apos;s secure enclave
+            returns a triage — and the answer is sealed with a key only your browser
+            holds. No clinic, no data broker, no profile.
+          </p>
+          <div className="meta-strip">
+            <span className="tag">⛓ chain 1979</span>
+            <span className="tag">◷ ~350ms blocks</span>
+            <span className="tag">🔑 ECIES private output</span>
+            <span className="tag">△ triages: {total?.toString() ?? "—"}</span>
+          </div>
+        </div>
+
+        {wrongChain && (
+          <div className="card">
+            <div className="verdict">You&apos;re on the wrong network.</div>
+            <div className="row">
+              <button className="btn-primary" onClick={() => switchChain({ chainId: ritualChain.id })}>
+                Switch to Ritual Chain
+              </button>
+            </div>
+          </div>
+        )}
+
+        <div className="card" ref={consoleRef}>
+          <h2>// describe your symptoms</h2>
+          <textarea
+            placeholder="e.g. Sore throat and mild fever for two days, plus a runny nose. No trouble breathing."
+            value={symptoms}
+            onChange={(e) => setSymptoms(e.target.value)}
+            disabled={busy}
+          />
+
+          <div className="examples">
+            <span className="examples-label">try:</span>
+            {EXAMPLES.map((ex) => (
+              <button key={ex.label} type="button" className="chip"
+                onClick={() => setSymptoms(ex.text)} disabled={busy}>
+                {ex.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="row">
+            <button className="btn-primary" onClick={onTriage} disabled={busy || !isConnected || wrongChain}>
+              {busy ? "Working…" : "🔒 Get private triage"}
+            </button>
+            {!isConnected && (
+              <button className="btn-ghost" onClick={connectWallet}>Connect wallet</button>
+            )}
+          </div>
+
+          <div className="privacy-note">
+            <span className="ico">🔑</span>
+            <span>
+              A one-time encryption key is born in your browser. Only its public half
+              is sent on-chain; the triage returns sealed to it — unreadable to the
+              network, the node, and us.
+            </span>
+          </div>
+
+          {showPipeline && (
+            <div className="pipeline">
+              {STEPS.map((s, i) => {
+                const state = i < activeStep ? "done" : i === activeStep ? "active" : "";
+                return (
+                  <div key={s.key} className={`step ${state}`}>
+                    <span className="bullet">
+                      {state === "done" ? "✓" : state === "active" ? <span className="spinner" /> : i + 1}
+                    </span>
+                    {s.label}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {error && <div className="error">⚠ {error}</div>}
+        </div>
+
+        {triage && phase === "done" && (
+          <div className="card result" ref={resultRef}>
+            <div className="result-head">
+              <h3>Your triage</h3>
+              {riskKey && (
+                <span className={`risk ${RISK_CLASS[riskKey] || ""}`}>
+                  <span className="ring" /> {triage.risk_level}
+                </span>
+              )}
+            </div>
+
+            {summaryText && (
+              <ScrambleText
+                className="summary"
+                text={summaryText}
+                duration={1300}
+                onDone={() => setRevealAdvice(true)}
+              />
+            )}
+
+            {revealAdvice && triage.advice && triage.advice.length > 0 && (
+              <ul className="advice" ref={adviceRef}>
+                {triage.advice.map((a, i) => (
+                  <li key={i}><span className="arrow">→</span>{a}</li>
+                ))}
+              </ul>
+            )}
+
+            {revealAdvice && typeof triage.see_doctor === "boolean" && (
+              <p className="verdict">
+                {triage.see_doctor ? "👩‍⚕️ Seeing a doctor is recommended." : "🟢 Self-care is likely reasonable for now."}
+              </p>
+            )}
+
+            <p className="disclaimer">
+              {triage.disclaimer || "Informational only — not a substitute for professional medical care."}
+            </p>
+
+            <div className="result-foot">
+              <span className="badge-enc">
+                {encrypted ? "🔒 decrypted locally" : "⚠ plaintext result"}
+              </span>
+              {txHash && (
+                <a href={`https://explorer.ritualfoundation.org/tx/${txHash}`} target="_blank" rel="noreferrer">
+                  view transaction ↗
+                </a>
+              )}
+            </div>
+          </div>
+        )}
+
+        <div className="foot">
+          built on ritual chain · llm precompile 0x0802 · ecies private outputs
+          <br />
+          MediCrypt is a demo. In an emergency, contact local emergency services.
+        </div>
       </div>
-    </div>
+    </>
   );
 }
