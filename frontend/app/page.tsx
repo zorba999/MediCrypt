@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import {
   useAccount,
   useConnect,
@@ -41,6 +41,29 @@ const RISK_CLASS: Record<string, string> = {
   emergency: "risk-emergency",
 };
 
+const EXAMPLES: { label: string; text: string }[] = [
+  {
+    label: "🤧 Cold / flu",
+    text: "Sore throat and a mild fever (37.9°C) for two days, plus a runny nose and a light cough. No trouble breathing.",
+  },
+  {
+    label: "🤕 Headache",
+    text: "A throbbing headache on one side for the last 6 hours, a bit of nausea, and light feels uncomfortable. No fever.",
+  },
+  {
+    label: "🤢 Stomach upset",
+    text: "Stomach cramps and diarrhea since this morning after eating out, with some nausea but no blood and no high fever.",
+  },
+  {
+    label: "🫁 Chest pain",
+    text: "Tight pressure in the center of my chest for about 20 minutes, spreading to my left arm, with shortness of breath and sweating.",
+  },
+  {
+    label: "🤚 Skin rash",
+    text: "An itchy red rash on both forearms that appeared yesterday after gardening. No swelling of the face or throat, breathing is fine.",
+  },
+];
+
 export default function Home() {
   const { address, isConnected } = useAccount();
   const { connect, connectors } = useConnect();
@@ -64,6 +87,18 @@ export default function Home() {
 
   const wrongChain = isConnected && chainId !== ritualChain.id;
   const busy = ["funding", "submitting", "waiting", "decrypting"].includes(phase);
+
+  // Once connected, make sure the wallet is on Ritual Chain — prompts MetaMask to add it
+  // (wallet_addEthereumChain) the first time, since it isn't a default network.
+  useEffect(() => {
+    if (isConnected && chainId !== ritualChain.id) {
+      switchChain({ chainId: ritualChain.id });
+    }
+  }, [isConnected, chainId, switchChain]);
+
+  function connectWallet() {
+    connect({ connector: connectors[0], chainId: ritualChain.id });
+  }
 
   async function ensureEscrow() {
     if (!walletClient || !address || !publicClient) return;
@@ -169,7 +204,7 @@ export default function Home() {
         ) : (
           <button
             className="btn-ghost"
-            onClick={() => connect({ connector: connectors[0] })}
+            onClick={connectWallet}
           >
             Connect wallet
           </button>
@@ -215,6 +250,22 @@ export default function Home() {
           onChange={(e) => setSymptoms(e.target.value)}
           disabled={busy}
         />
+
+        <div className="examples">
+          <span className="examples-label">Try an example:</span>
+          {EXAMPLES.map((ex) => (
+            <button
+              key={ex.label}
+              type="button"
+              className="chip"
+              onClick={() => setSymptoms(ex.text)}
+              disabled={busy}
+            >
+              {ex.label}
+            </button>
+          ))}
+        </div>
+
         <div className="row">
           <button
             className="btn-primary"
@@ -226,7 +277,7 @@ export default function Home() {
           {!isConnected && (
             <button
               className="btn-ghost"
-              onClick={() => connect({ connector: connectors[0] })}
+              onClick={connectWallet}
             >
               Connect wallet
             </button>
