@@ -4,7 +4,6 @@ import { useState, useEffect, useRef } from "react";
 import {
   useAccount,
   useConnect,
-  useChainId,
   useSwitchChain,
   usePublicClient,
   useWalletClient,
@@ -72,9 +71,8 @@ function phaseStepIndex(phase: Phase, connected: boolean): number {
 }
 
 export default function Home() {
-  const { address, isConnected } = useAccount();
+  const { address, isConnected, chainId } = useAccount();
   const { connect, connectors } = useConnect();
-  const chainId = useChainId();
   const { switchChain } = useSwitchChain();
   const publicClient = usePublicClient();
   const { data: walletClient } = useWalletClient();
@@ -98,7 +96,8 @@ export default function Home() {
     functionName: "totalTriages",
   });
 
-  const wrongChain = isConnected && chainId !== ritualChain.id;
+  const onRitual = chainId === ritualChain.id;
+  const wrongChain = isConnected && !onRitual;
   const busy = ["funding", "submitting", "waiting", "decrypting"].includes(phase);
   const showPipeline = busy || phase === "done";
   const activeStep = phaseStepIndex(phase, isConnected);
@@ -168,8 +167,17 @@ export default function Home() {
     setTriage(null);
     setTxHash(null);
     setRevealAdvice(false);
-    if (!walletClient || !address || !publicClient) {
+    if (!isConnected || !address) {
       setError("Connect your wallet first.");
+      return;
+    }
+    if (wrongChain) {
+      setError("Switching your wallet to Ritual Chain…");
+      switchChain({ chainId: ritualChain.id });
+      return;
+    }
+    if (!walletClient || !publicClient) {
+      setError("Wallet is still initializing — try again in a moment.");
       return;
     }
     if (!symptoms.trim()) {
@@ -304,11 +312,21 @@ export default function Home() {
           </div>
 
           <div className="row">
-            <button className="btn-primary" onClick={onTriage} disabled={busy || !isConnected || wrongChain}>
-              {busy ? "Working…" : "🔒 Get private triage"}
-            </button>
-            {!isConnected && (
-              <button className="btn-ghost" onClick={connectWallet}>Connect wallet</button>
+            {!isConnected ? (
+              <button className="btn-primary" onClick={connectWallet}>
+                Connect wallet
+              </button>
+            ) : wrongChain ? (
+              <button
+                className="btn-primary"
+                onClick={() => switchChain({ chainId: ritualChain.id })}
+              >
+                ⛓ Switch to Ritual network
+              </button>
+            ) : (
+              <button className="btn-primary" onClick={onTriage} disabled={busy}>
+                {busy ? "Working…" : "🔒 Get private triage"}
+              </button>
             )}
           </div>
 
