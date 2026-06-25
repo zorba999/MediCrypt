@@ -25,7 +25,6 @@ import {
   decodeTriageResult,
   type Triage,
 } from "@/lib/triage";
-import { BgCanvas } from "@/components/BgCanvas";
 import { ThemeToggle } from "@/components/ThemeToggle";
 import { ScrambleText } from "@/components/ScrambleText";
 
@@ -228,7 +227,6 @@ export default function Home() {
     <>
       <div className="bg-aura" aria-hidden />
       <div className="bg-grid" aria-hidden />
-      <BgCanvas />
 
       <div className="wrap">
         <div className="topbar">
