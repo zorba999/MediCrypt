@@ -142,6 +142,17 @@ export default function Home() {
     connect({ connector: connectors[0], chainId: ritualChain.id });
   }
 
+  // Async-precompile txs can't be gas-estimated by the wallet, so we supply explicit
+  // EIP-1559 fees + gas. Without these, wallets show "Network fee --" and disable Confirm.
+  async function getFees() {
+    try {
+      const f = await publicClient!.estimateFeesPerGas();
+      return { maxFeePerGas: f.maxFeePerGas, maxPriorityFeePerGas: f.maxPriorityFeePerGas };
+    } catch {
+      return { maxFeePerGas: 2_000_000_000n, maxPriorityFeePerGas: 1_000_000_000n };
+    }
+  }
+
   async function ensureEscrow() {
     if (!walletClient || !address || !publicClient) return;
     const bal = (await publicClient.readContract({
@@ -152,12 +163,15 @@ export default function Home() {
     })) as bigint;
     if (bal >= parseEther("0.4")) return;
     setPhase("funding");
+    const fees = await getFees();
     const hash = await walletClient.writeContract({
       address: RITUAL_WALLET,
       abi: RITUAL_WALLET_ABI,
       functionName: "deposit",
       args: [5000n],
       value: parseEther("0.5"),
+      gas: 200_000n,
+      ...fees,
     });
     await publicClient.waitForTransactionReceipt({ hash });
   }
@@ -189,12 +203,14 @@ export default function Home() {
       const eph = generateEphemeralKey();
 
       setPhase("submitting");
+      const fees = await getFees();
       const hash = await walletClient.writeContract({
         address: MEDICRYPT_ADDRESS,
         abi: MEDICRYPT_ABI,
         functionName: "requestTriage",
         args: [LLM_EXECUTOR, symptoms.trim(), eph.publicKey],
         gas: 6_000_000n,
+        ...fees,
       });
       setTxHash(hash);
 
