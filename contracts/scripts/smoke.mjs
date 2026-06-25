@@ -27,7 +27,7 @@ const SYMPTOMS =
 
 // 1. Ephemeral keypair — the private key never leaves this process (the browser, in prod).
 const sk = new PrivateKey();
-const userPublicKey = `0x${sk.publicKey.toHex()}`;
+const userPublicKey = `0x${sk.publicKey.toHex(false)}`; // uncompressed SEC1 (65 bytes, 0x04)
 const userPrivateKey = sk.toHex();
 console.log("Ephemeral pubkey:", userPublicKey.slice(0, 26) + "...");
 

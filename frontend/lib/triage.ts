@@ -8,11 +8,12 @@ export interface EphemeralKey {
   privateKey: string;
 }
 
-/** Generate a one-time keypair. The private key stays in memory in the browser only. */
+/** Generate a one-time keypair. The private key stays in memory in the browser only.
+ *  The Ritual LLM precompile requires an UNCOMPRESSED SEC1 public key (65 bytes, 0x04). */
 export function generateEphemeralKey(): EphemeralKey {
   const sk = new PrivateKey();
   return {
-    publicKey: `0x${sk.publicKey.toHex()}` as Hex,
+    publicKey: `0x${sk.publicKey.toHex(false)}` as Hex, // false = uncompressed
     privateKey: sk.toHex(),
   };
 }
