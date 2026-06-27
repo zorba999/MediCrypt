@@ -156,9 +156,9 @@ export default function Home() {
   }
 
   // The inference fee is escrowed in RitualWallet, and the async call REQUIRES the escrow to
-  // stay locked past the settlement block. The lock must be long (a short lock makes the RPC
-  // reject the tx with "insufficient lock duration"), so we deposit with a 100k-block lock —
-  // valid for a long session. We top up + re-lock only when the balance can't cover a call.
+  // stay locked past the settlement block. Too short → the RPC rejects with "insufficient lock
+  // duration"; too long → the worst-case (~0.31 RIT) reservation per call doesn't refund and
+  // the balance starves after a couple calls. 5000 blocks (~29 min) is the right balance.
   async function ensureEscrow() {
     if (!walletClient || !address || !publicClient) return;
     const bal = (await publicClient.readContract({
@@ -174,7 +174,7 @@ export default function Home() {
       address: RITUAL_WALLET,
       abi: RITUAL_WALLET_ABI,
       functionName: "deposit",
-      args: [100_000n],
+      args: [5000n],
       value: parseEther("0.5"),
       gas: 200_000n,
       ...fees,
@@ -206,79 +206,102 @@ export default function Home() {
     }
     try {
       await ensureEscrow();
-      const eph = generateEphemeralKey();
 
-      setPhase("submitting");
+      // Ritual's testnet has a single LLM executor that intermittently drops requests (the
+      // builder skips them silently — no settlement, no event, and the tx isn't even mined, so
+      // a retry costs nothing). We resubmit a few times until one settles. Each attempt uses a
+      // fresh ephemeral key, so we keep them all and decrypt the result with whichever matches.
       const fromBlock = await publicClient.getBlockNumber();
-      const triageReq = {
+      const keys: string[] = [];
+      const triageReqBase = {
         address: MEDICRYPT_ADDRESS,
         abi: MEDICRYPT_ABI,
         functionName: "requestTriage" as const,
-        args: [LLM_EXECUTOR, symptoms.trim(), eph.publicKey] as const,
         gas: 6_000_000n,
       };
-      let hash: Hex;
-      try {
-        hash = await walletClient.writeContract({ ...triageReq, ...(await getFees()) });
-      } catch (e: any) {
-        // Escrow lock expired between calls — renew the lock, then retry once.
-        const msg = (e?.details || e?.shortMessage || e?.message || "").toLowerCase();
-        if (!msg.includes("lock")) throw e;
-        setPhase("funding");
-        const dh = await walletClient.writeContract({
-          address: RITUAL_WALLET,
-          abi: RITUAL_WALLET_ABI,
-          functionName: "deposit",
-          args: [100_000n],
-          value: parseEther("0.1"),
-          gas: 200_000n,
-          ...(await getFees()),
-        });
-        await publicClient.waitForTransactionReceipt({ hash: dh, timeout: 120_000 });
-        setPhase("submitting");
-        hash = await walletClient.writeContract({ ...triageReq, ...(await getFees()) });
-      }
-      setTxHash(hash);
 
-      // Async precompile txs settle under the deferred-replay mechanism, so the original
-      // tx hash never yields a receipt. Watch for the TriageCompleted event instead.
-      setPhase("waiting");
       let resultHex: Hex | null = null;
       let hadError = false;
-      const deadline = Date.now() + 180_000;
-      while (Date.now() < deadline) {
-        await new Promise((r) => setTimeout(r, 3000));
-        const logs = await publicClient.getContractEvents({
-          address: MEDICRYPT_ADDRESS,
-          abi: MEDICRYPT_ABI,
-          eventName: "TriageCompleted",
-          fromBlock,
-          toBlock: "latest",
-        });
-        const mine = logs.filter(
-          (l) => (l.args.user as string)?.toLowerCase() === address.toLowerCase()
-        );
-        if (mine.length) {
-          const ev = mine[mine.length - 1];
-          hadError = ev.args.hasError as boolean;
-          resultHex = ev.args.encryptedResult as Hex;
-          break;
+      const MAX_ATTEMPTS = 4;
+
+      for (let attempt = 1; attempt <= MAX_ATTEMPTS && !resultHex; attempt++) {
+        const eph = generateEphemeralKey();
+        keys.push(eph.privateKey);
+        const req = {
+          ...triageReqBase,
+          args: [LLM_EXECUTOR, symptoms.trim(), eph.publicKey] as const,
+        };
+
+        setPhase("submitting");
+        let hash: Hex;
+        try {
+          hash = await walletClient.writeContract({ ...req, ...(await getFees()) });
+        } catch (e: any) {
+          const msg = (e?.details || e?.shortMessage || e?.message || "").toLowerCase();
+          if (!msg.includes("lock")) throw e;
+          // Escrow lock expired — renew it and resubmit this attempt.
+          setPhase("funding");
+          const dh = await walletClient.writeContract({
+            address: RITUAL_WALLET,
+            abi: RITUAL_WALLET_ABI,
+            functionName: "deposit",
+            args: [5000n],
+            value: parseEther("0.5"),
+            gas: 200_000n,
+            ...(await getFees()),
+          });
+          await publicClient.waitForTransactionReceipt({ hash: dh, timeout: 120_000 });
+          setPhase("submitting");
+          hash = await walletClient.writeContract({ ...req, ...(await getFees()) });
+        }
+        setTxHash(hash);
+
+        // Wait up to ~55s for THIS attempt to settle; otherwise resubmit.
+        setPhase("waiting");
+        const deadline = Date.now() + 55_000;
+        while (Date.now() < deadline && !resultHex) {
+          await new Promise((r) => setTimeout(r, 3000));
+          const logs = await publicClient.getContractEvents({
+            address: MEDICRYPT_ADDRESS,
+            abi: MEDICRYPT_ABI,
+            eventName: "TriageCompleted",
+            fromBlock,
+            toBlock: "latest",
+          });
+          const mine = logs.filter(
+            (l) => (l.args.user as string)?.toLowerCase() === address.toLowerCase()
+          );
+          if (mine.length) {
+            const ev = mine[mine.length - 1];
+            hadError = ev.args.hasError as boolean;
+            resultHex = ev.args.encryptedResult as Hex;
+          }
         }
       }
 
       setPhase("decrypting");
       if (!resultHex || resultHex === "0x") {
         throw new Error(
-          "Timed out waiting for the triage result — the TEE executor may be busy. Please try again."
+          "The testnet TEE executor is busy and dropped the request several times. Please click Get private triage again."
         );
       }
       if (hadError) {
         throw new Error("The model returned an error. Please try again.");
       }
 
-      const { triage: t, wasEncrypted } = decodeTriageResult(resultHex, eph.privateKey);
-      setTriage(t);
-      setEncrypted(wasEncrypted);
+      // Decrypt with whichever ephemeral key matches (events may settle out of order).
+      let decoded = decodeTriageResult(resultHex, keys[keys.length - 1]);
+      if (decoded.triage.raw && keys.length > 1) {
+        for (const k of keys) {
+          const d = decodeTriageResult(resultHex, k);
+          if (!d.triage.raw) {
+            decoded = d;
+            break;
+          }
+        }
+      }
+      setTriage(decoded.triage);
+      setEncrypted(decoded.wasEncrypted);
       setPhase("done");
     } catch (e: any) {
       setError(e?.shortMessage || e?.message || "Something went wrong.");
