@@ -1,7 +1,7 @@
 import type { Address } from "viem";
 
 export const MEDICRYPT_ADDRESS = (process.env.NEXT_PUBLIC_MEDICRYPT_ADDRESS ||
-  "0x3FCAb9cef001F19336f0806C04195988c2501CA4") as Address;
+  "0xada7f720ae1a2b3c58ee1e7f7ed95467c725f708") as Address;
 
 export const LLM_EXECUTOR = (process.env.NEXT_PUBLIC_LLM_EXECUTOR ||
   "0xB42e435c4252A5a2E7440e37B609F00c61a0c91B") as Address;

@@ -155,10 +155,10 @@ export default function Home() {
     }
   }
 
-  // The inference fee is escrowed in RitualWallet. A call reserves a worst-case ~0.31 RIT
-  // that refunds (minus the tiny realized fee) after the lock window. We deposit 1 RIT with
-  // a short 300-block lock so unused escrow frees up in ~2 min instead of ~29 min, and only
-  // top up when the balance can't cover a single call.
+  // The inference fee is escrowed in RitualWallet, and the async call REQUIRES the escrow to
+  // stay locked past the settlement block. The lock must be long (a short lock makes the RPC
+  // reject the tx with "insufficient lock duration"), so we deposit with a 100k-block lock —
+  // valid for a long session. We top up + re-lock only when the balance can't cover a call.
   async function ensureEscrow() {
     if (!walletClient || !address || !publicClient) return;
     const bal = (await publicClient.readContract({
@@ -174,8 +174,8 @@ export default function Home() {
       address: RITUAL_WALLET,
       abi: RITUAL_WALLET_ABI,
       functionName: "deposit",
-      args: [300n],
-      value: parseEther("1"),
+      args: [100_000n],
+      value: parseEther("0.5"),
       gas: 200_000n,
       ...fees,
     });
@@ -210,15 +210,34 @@ export default function Home() {
 
       setPhase("submitting");
       const fromBlock = await publicClient.getBlockNumber();
-      const fees = await getFees();
-      const hash = await walletClient.writeContract({
+      const triageReq = {
         address: MEDICRYPT_ADDRESS,
         abi: MEDICRYPT_ABI,
-        functionName: "requestTriage",
-        args: [LLM_EXECUTOR, symptoms.trim(), eph.publicKey],
+        functionName: "requestTriage" as const,
+        args: [LLM_EXECUTOR, symptoms.trim(), eph.publicKey] as const,
         gas: 6_000_000n,
-        ...fees,
-      });
+      };
+      let hash: Hex;
+      try {
+        hash = await walletClient.writeContract({ ...triageReq, ...(await getFees()) });
+      } catch (e: any) {
+        // Escrow lock expired between calls — renew the lock, then retry once.
+        const msg = (e?.details || e?.shortMessage || e?.message || "").toLowerCase();
+        if (!msg.includes("lock")) throw e;
+        setPhase("funding");
+        const dh = await walletClient.writeContract({
+          address: RITUAL_WALLET,
+          abi: RITUAL_WALLET_ABI,
+          functionName: "deposit",
+          args: [100_000n],
+          value: parseEther("0.1"),
+          gas: 200_000n,
+          ...(await getFees()),
+        });
+        await publicClient.waitForTransactionReceipt({ hash: dh, timeout: 120_000 });
+        setPhase("submitting");
+        hash = await walletClient.writeContract({ ...triageReq, ...(await getFees()) });
+      }
       setTxHash(hash);
 
       // Async precompile txs settle under the deferred-replay mechanism, so the original

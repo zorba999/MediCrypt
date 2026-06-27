@@ -67,26 +67,55 @@ function decodeCompletionContent(hex: Hex): string | null {
   }
 }
 
+/** Unwrap one ABI `(bytes, bytes)` layer, returning the first element (or null). */
+function firstBytes(hex: Hex): Hex | null {
+  try {
+    const [a] = decodeAbiParameters(parseAbiParameters("bytes, bytes"), hex);
+    return a as Hex;
+  } catch {
+    return null;
+  }
+}
+
+/** Second element of an ABI `(bytes, bytes)` (or null). */
+function secondBytes(hex: Hex): Hex | null {
+  try {
+    const [, b] = decodeAbiParameters(parseAbiParameters("bytes, bytes"), hex);
+    return b as Hex;
+  } catch {
+    return null;
+  }
+}
+
 /**
- * Turn the on-chain `encryptedResult` bytes into a Triage.
- * Tries ECIES decryption first (private output), then falls back to decoding a
- * plaintext completion envelope.
+ * Turn the on-chain raw precompile result into a Triage.
+ *
+ * Encrypted layout (the live path):
+ *   result   = (bytes simmedInput, bytes actualOutput)
+ *   actualOutput = (bytes encryptedCompletion, bytes metadata)
+ *   encryptedCompletion = ECIES blob -> decrypt with the ephemeral key (nonce len 12)
+ *   decrypted = ABI completion bytes whose text contains the triage JSON.
  */
 export function decodeTriageResult(
   resultHex: Hex,
   ephemeralPrivateKey: string
 ): { triage: Triage; wasEncrypted: boolean } {
-  // Path A: private output encrypted to the ephemeral key.
-  try {
-    const decrypted = decrypt(ephemeralPrivateKey, hexToBytes(resultHex));
-    const plain = new TextDecoder().decode(decrypted);
-    return { triage: extractJson(plain), wasEncrypted: true };
-  } catch {
-    /* not encrypted at this layer — try plaintext ABI */
+  const actualOutput = secondBytes(resultHex) ?? resultHex;
+
+  // Private path: decrypt the encrypted completion blob.
+  const encBlob = firstBytes(actualOutput);
+  if (encBlob) {
+    try {
+      const decrypted = decrypt(ephemeralPrivateKey, hexToBytes(encBlob));
+      const text = new TextDecoder().decode(decrypted);
+      return { triage: extractJson(text), wasEncrypted: true };
+    } catch {
+      /* fall through to plaintext */
+    }
   }
 
-  // Path B: plaintext completion envelope.
-  const content = decodeCompletionContent(resultHex);
+  // Fallback: plaintext completion envelope (no output encryption).
+  const content = decodeCompletionContent(actualOutput);
   if (content) return { triage: extractJson(content), wasEncrypted: false };
 
   return { triage: { raw: "Could not decode the triage result." }, wasEncrypted: false };

@@ -80,21 +80,18 @@ contract MediCrypt {
         bytes memory input = _encodeRequest(executor, symptoms, userPublicKey);
 
         // Short-running async: the builder re-executes this tx with the settled output
-        // injected, so the precompile call returns (bytes simmedInput, bytes actualOutput).
+        // injected. We do NOT decode the response on-chain — when the output is encrypted
+        // to the caller's key the envelope layout is non-trivial, and a strict on-chain
+        // abi.decode reverts on any shape mismatch. Emit the raw precompile return and let
+        // the client unwrap + decrypt it. The contract only needs the call to succeed.
         (bool success, bytes memory result) = LLM_PRECOMPILE.call(input);
         require(success, "LLM precompile call failed");
-        (, bytes memory actualOutput) = abi.decode(result, (bytes, bytes));
-
-        (bool hasError, bytes memory completionData, , , ) = abi.decode(
-            actualOutput,
-            (bool, bytes, bytes, string, StorageRef)
-        );
 
         triageCount[msg.sender] = index + 1;
         totalTriages += 1;
         lastTriageBlock[msg.sender] = block.number;
 
-        emit TriageCompleted(msg.sender, index, hasError, completionData);
+        emit TriageCompleted(msg.sender, index, false, result);
     }
 
     /// @dev Builds the 30-field LLM precompile request tuple.
