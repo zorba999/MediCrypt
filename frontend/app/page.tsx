@@ -9,7 +9,7 @@ import {
   useWalletClient,
   useReadContract,
 } from "wagmi";
-import { decodeEventLog, parseEther, type Hex } from "viem";
+import { parseEther, type Hex } from "viem";
 import gsap from "gsap";
 import { ritualChain } from "@/lib/chain";
 import {
@@ -147,11 +147,18 @@ export default function Home() {
   async function getFees() {
     try {
       const f = await publicClient!.estimateFeesPerGas();
-      return { maxFeePerGas: f.maxFeePerGas, maxPriorityFeePerGas: f.maxPriorityFeePerGas };
+      // Add headroom so the async-settlement tx is picked up promptly, not left pending.
+      return {
+        maxFeePerGas: f.maxFeePerGas * 2n + 2_000_000_000n,
+        maxPriorityFeePerGas: (f.maxPriorityFeePerGas ?? 1_000_000_000n) + 1_000_000_000n,
+      };
     } catch {
-      return { maxFeePerGas: 2_000_000_000n, maxPriorityFeePerGas: 1_000_000_000n };
+      return { maxFeePerGas: 5_000_000_000n, maxPriorityFeePerGas: 2_000_000_000n };
     }
   }
+
+  // LLM settlement can take tens of seconds; wait generously instead of timing out.
+  const RECEIPT_OPTS = { timeout: 300_000, pollingInterval: 2_500 } as const;
 
   async function ensureEscrow() {
     if (!walletClient || !address || !publicClient) return;
@@ -173,7 +180,7 @@ export default function Home() {
       gas: 200_000n,
       ...fees,
     });
-    await publicClient.waitForTransactionReceipt({ hash });
+    await publicClient.waitForTransactionReceipt({ hash, ...RECEIPT_OPTS });
   }
 
   async function onTriage() {
@@ -203,6 +210,7 @@ export default function Home() {
       const eph = generateEphemeralKey();
 
       setPhase("submitting");
+      const fromBlock = await publicClient.getBlockNumber();
       const fees = await getFees();
       const hash = await walletClient.writeContract({
         address: MEDICRYPT_ADDRESS,
@@ -214,24 +222,40 @@ export default function Home() {
       });
       setTxHash(hash);
 
+      // Async precompile txs settle under the deferred-replay mechanism, so the original
+      // tx hash never yields a receipt. Watch for the TriageCompleted event instead.
       setPhase("waiting");
-      const receipt = await publicClient.waitForTransactionReceipt({ hash });
-
-      setPhase("decrypting");
       let resultHex: Hex | null = null;
       let hadError = false;
-      for (const log of receipt.logs) {
-        try {
-          const ev = decodeEventLog({ abi: MEDICRYPT_ABI, data: log.data, topics: log.topics });
-          if (ev.eventName === "TriageCompleted") {
-            hadError = ev.args.hasError as boolean;
-            resultHex = ev.args.encryptedResult as Hex;
-          }
-        } catch { /* not our event */ }
+      const deadline = Date.now() + 180_000;
+      while (Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const logs = await publicClient.getContractEvents({
+          address: MEDICRYPT_ADDRESS,
+          abi: MEDICRYPT_ABI,
+          eventName: "TriageCompleted",
+          fromBlock,
+          toBlock: "latest",
+        });
+        const mine = logs.filter(
+          (l) => (l.args.user as string)?.toLowerCase() === address.toLowerCase()
+        );
+        if (mine.length) {
+          const ev = mine[mine.length - 1];
+          hadError = ev.args.hasError as boolean;
+          resultHex = ev.args.encryptedResult as Hex;
+          break;
+        }
       }
 
-      if (hadError || !resultHex || resultHex === "0x") {
-        throw new Error("The model could not complete the triage. Please try again.");
+      setPhase("decrypting");
+      if (!resultHex || resultHex === "0x") {
+        throw new Error(
+          "Timed out waiting for the triage result — the TEE executor may be busy. Please try again."
+        );
+      }
+      if (hadError) {
+        throw new Error("The model returned an error. Please try again.");
       }
 
       const { triage: t, wasEncrypted } = decodeTriageResult(resultHex, eph.privateKey);
