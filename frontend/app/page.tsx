@@ -144,22 +144,21 @@ export default function Home() {
 
   // Async-precompile txs can't be gas-estimated by the wallet, so we supply explicit
   // EIP-1559 fees + gas. Without these, wallets show "Network fee --" and disable Confirm.
+  // Ritual gas is ~1 gwei with a near-zero base fee; use the network estimate directly so
+  // wallets show a tiny network fee instead of an inflated max.
   async function getFees() {
     try {
       const f = await publicClient!.estimateFeesPerGas();
-      // Add headroom so the async-settlement tx is picked up promptly, not left pending.
-      return {
-        maxFeePerGas: f.maxFeePerGas * 2n + 2_000_000_000n,
-        maxPriorityFeePerGas: (f.maxPriorityFeePerGas ?? 1_000_000_000n) + 1_000_000_000n,
-      };
+      return { maxFeePerGas: f.maxFeePerGas, maxPriorityFeePerGas: f.maxPriorityFeePerGas };
     } catch {
-      return { maxFeePerGas: 5_000_000_000n, maxPriorityFeePerGas: 2_000_000_000n };
+      return { maxFeePerGas: 2_000_000_000n, maxPriorityFeePerGas: 1_000_000_000n };
     }
   }
 
-  // LLM settlement can take tens of seconds; wait generously instead of timing out.
-  const RECEIPT_OPTS = { timeout: 300_000, pollingInterval: 2_500 } as const;
-
+  // The inference fee is escrowed in RitualWallet. A call reserves a worst-case ~0.31 RIT
+  // that refunds (minus the tiny realized fee) after the lock window. We deposit 1 RIT with
+  // a short 300-block lock so unused escrow frees up in ~2 min instead of ~29 min, and only
+  // top up when the balance can't cover a single call.
   async function ensureEscrow() {
     if (!walletClient || !address || !publicClient) return;
     const bal = (await publicClient.readContract({
@@ -175,12 +174,12 @@ export default function Home() {
       address: RITUAL_WALLET,
       abi: RITUAL_WALLET_ABI,
       functionName: "deposit",
-      args: [5000n],
-      value: parseEther("0.5"),
+      args: [300n],
+      value: parseEther("1"),
       gas: 200_000n,
       ...fees,
     });
-    await publicClient.waitForTransactionReceipt({ hash, ...RECEIPT_OPTS });
+    await publicClient.waitForTransactionReceipt({ hash, timeout: 120_000 });
   }
 
   async function onTriage() {
